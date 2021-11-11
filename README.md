@@ -9,7 +9,8 @@ This package is currently under development and backward compatibility is theref
 
 ## Installation 
 
-The installation steps below have been written for **Linux/Ubuntu**.
+The installation steps below have been written for **Linux/Ubuntu**. All file paths are relative to
+the repository root directory.
 
 Clone the repository onto your local system: 
 
@@ -70,4 +71,13 @@ connectionSettings = dict(
 )
 ````
 
-To setup the database, run the python script `scripts/setup_db.py`
+### Data
+
+For now, the local database is empty. We will populate it with data retrieved from https://www.euets.info/.
+Download the zip file from https://www.euets.info/static//download/eutl.zip and save it
+in `data/eutl.zip`
+
+### Set up the database
+
+To set up the database, run the python script `scripts/setup_db.py`. The process typically takes up
+to 10 minutes.
