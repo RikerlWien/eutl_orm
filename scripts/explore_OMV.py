@@ -1,6 +1,7 @@
 import sys
 import os
-os.chdir('C:/Users/lmillischer/PycharmProjects/eutl_orm')
+from os.path import dirname
+sys.path.append(dirname(__file__))
 
 import numpy as np
 import pandas as pd
@@ -43,7 +44,7 @@ compliance_data[['year', 'allocatedTotal', 'verified', 'surrendered']]\
     .set_index('year').div(1000000)\
     .plot(kind='bar', figsize=(10, 7), ylabel=r'Million tCO$_2$', grid=True)
 plt.tight_layout()
-plt.savefig('plots/compliance.png')
+plt.savefig('../plots/compliance.png')
 plt.close()
 
 # ---------------------------------------------------------------------------------------------------
@@ -104,7 +105,7 @@ mapping_tmp = mapping_tmp.rename(columns={"id": "acquiringAccount_id",
 aggregated_transactions = aggregated_transactions.merge(mapping_tmp, how="left", on="acquiringAccount_id", indicator=True)
 stat = aggregated_transactions.groupby('_merge')['acquiringAccount_id'].count()
 #print(stat)
-del aggregated_transactions['_merge']
+aggregated_transactions = aggregated_transactions.drop(columns=['_merge'])
 
 # temporary mapping for the Transferring Account
 mapping_tmp = account_to_account_holder.copy()
@@ -115,7 +116,7 @@ mapping_tmp = mapping_tmp.rename(columns={"id": "transferringAccount_id",
 aggregated_transactions = aggregated_transactions.merge(mapping_tmp, how="left", on="transferringAccount_id", indicator=True)
 stat = aggregated_transactions.groupby('_merge')['acquiringAccount_id'].count()
 #print(stat)
-del aggregated_transactions['_merge']
+aggregated_transactions = aggregated_transactions.drop(columns=['_merge'])
 
 # drop all transactions internal to an Account Holder
 internal_transactions_sel = aggregated_transactions.acquiringAccountHolder_id == aggregated_transactions.transferringAccountHolder_id
@@ -137,7 +138,7 @@ ax.grid()
 ax.set_ylabel("price [EUR/t]")
 ax.set_title("price of EU ETS greenhouse emission allowances")
 plt.tight_layout()
-plt.savefig('plots/ets_prices.png')
+plt.savefig('../plots/ets_prices.png')
 plt.close()
 
 # ---------------------------------------------------------------------------------------------------
@@ -147,7 +148,7 @@ plt.close()
 aggregated_transactions = aggregated_transactions.merge(prices, how='left', on="date", indicator=True)
 stat = aggregated_transactions.groupby('_merge')['acquiringAccount_id'].count()
 #print(stat)
-del aggregated_transactions['_merge']
+aggregated_transactions = aggregated_transactions.drop(columns=['_merge'])
 
 eu_allocation_account_id = session.query(Account).filter(Account.name == "EU EU ALLOCATION ACCOUNT").first().id
 eu_deletion_account_id = session.query(Account).filter(Account.name == "EU EU Allowance deletion").first().id
@@ -184,7 +185,7 @@ ax.set_ylabel("cum. amount of allowances [Mio. t CO2e]")
 ax.set_title(account_holder.name)
 fig.autofmt_xdate()
 plt.tight_layout()
-plt.savefig('plots/cum_vol.png')
+plt.savefig('../plots/cum_vol.png')
 plt.close()
 
 fig, ax = plt.subplots(figsize=(10, 7))
@@ -194,6 +195,6 @@ ax.set_ylabel("cum. amount of allowances [Mio. t CO2e]")
 ax.set_title(account_holder.name)
 fig.autofmt_xdate()
 plt.tight_layout()
-plt.savefig('plots/cum_vol_zoom.png')
+plt.savefig('../plots/cum_vol_zoom.png')
 plt.close()
 
