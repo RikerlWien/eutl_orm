@@ -1,5 +1,9 @@
 
+import numpy as np
 import pandas as pd
+import networkx as nx
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
 from eutl_orm import DataAccessLayer
 from attic.connection_settings import connectionSettings
@@ -9,7 +13,7 @@ dal = DataAccessLayer(**connectionSettings)
 session = dal.session
 
 
-class EntityConnexion():
+class EntityConnexion:
     def __init__(self, entity_type, entity_id, period=(None, None)):
         if entity_type in ['Account', 'Company', 'AccountHolder']:
             self.entity_type = entity_type
@@ -20,26 +24,27 @@ class EntityConnexion():
         self.period = period
         self.accounts = None
         self.transactions = None
-        self.name = None
+        self.entity_name = None
 
         self.get_accounts()
         self.get_transactions()
+        self.plot_arrows()
 
     def get_accounts(self):
         # look up list of accounts and return it
         if self.entity_type == 'Account':
             self.accounts = session.query(Account).filter(Account.id == self.entity_id).all()
-            self.name = self.accounts[0].name
+            self.entity_name = self.accounts[0].name
         elif self.entity_type == 'AccountHolder':
             self.accounts = session.query(Account).filter(Account.accountHolder_id == self.entity_id).all()
-            self.name = session.query(AccountHolder).filter(AccountHolder.id == self.entity_id).first().name
+            self.entity_name = session.query(AccountHolder).filter(AccountHolder.id == self.entity_id).first().name
         elif self.entity_type == 'Company':
             self.accounts = session.query(Account).filter(Account.companyRegistrationNumber == self.entity_id).all()
-            self.name = ''
+            self.entity_name = ''
 
         print('You are working with {} with id {} ({}) - {} related accounts'.format(self.entity_type,
                                                                                      self.entity_id,
-                                                                                     self.name,
+                                                                                     self.entity_name,
                                                                                      len(self.accounts)))
 
     def get_transactions(self):
@@ -48,31 +53,111 @@ class EntityConnexion():
             transaction_tables.append(account.get_transactions())
 
         transactions = pd.concat(transaction_tables)
-
-        # add date and datetime information to table (to price transactions with daily ETS price)
-        transactions['date'] = pd.to_datetime(transactions.index.date)
         transactions['datetime'] = pd.to_datetime(transactions.index)
 
-        # aggregate transaction blocks into individual transactions
-        self.transactions = transactions.groupby('transactionID').agg({'amount': 'sum',
-                                                                       'amount_directed': 'sum',
-                                                                       'transferringAccount_id': 'first',
-                                                                       'acquiringAccount_id': 'first',
-                                                                       'date': 'first',
-                                                                       'datetime': 'first',
-                                                                       'acquiringAccountName': 'first',
-                                                                       'transferringAccountName': 'first',
-                                                                       'transactionTypeMain': 'first',
-                                                                       'transactionTypeSupplementary_id': 'first'})
+        transactions = transactions[['datetime', 'amount',
+                                     'transferringAccount_id', 'transferringAccountName', 'transferringAccountType',
+                                     'acquiringAccount_id', 'acquiringAccountName', 'acquiringAccountType',
+                                     'transactionTypeMain', 'transactionTypeSupplementary', 'unitType']]
 
-        print(self.transactions.dtypes)
+        if self.entity_type == 'Account':
+            for v in ['transferring', 'acquiring']:
+                transactions.rename(columns={f'{v}Account_id': f'{v}Entity_id',
+                                             f'{v}AccountName': f'{v}Entity_name',
+                                             f'{v}AccountType': f'{v}Entity_type'}, inplace=True)
+        elif self.entity_type == 'AccountHolder':
+            # todo: merge with account get accountholder_id > merger with accountHolder (transferring and acquiring) > keep accountholder name
+            #  then rename columns
+            pass
+        elif self.entity_type == 'Company':
+            # todo: merge with account get accountholder_id > merger with accountHolder (transferring and acquiring) > keep accountholder name
+            #  then rename columns
+            pass
 
-        print('  > Found {} transactions'.format(len(self.transactions)))
-        print()
+        self.transactions = transactions
+
+        print('  > Found {} transactions\n'.format(len(self.transactions)))
         # todo: add the period condition here
 
+    def plot_arrows(self):
+
+        df = self.transactions
+        this_node = self.entity_id
+
+        G = nx.from_pandas_edgelist(df, source='transferringEntity_id', target='acquiringEntity_id',
+                                    edge_attr='amount', create_using=nx.DiGraph())
+
+        # determine receiver/sender/trader status
+        attrs = {}
+        trans_entities = set(df['transferringEntity_id'].to_list())
+        acqui_entities = set(df['acquiringEntity_id'].to_list())
+
+        # colors
+        color_legend = {'this': 'green', 'trader': 'violet', 'sender': 'blue', 'receiver': 'red'}
+        color_handles = []
+        for c in color_legend:
+            color_handles.append(mpatches.Patch(color=color_legend[c], label=c))
+
+        # loop over nodes
+        for node in G:
+            attrs[node] = {}
+            if (node in trans_entities) and (node in acqui_entities):
+                attrs[node]['trader_type'] = 'trader'
+                attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
+                attrs[node]['type'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_type']
+                attrs[node]['name'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_name']
+            elif node in trans_entities:
+                attrs[node]['trader_type'] = 'sender'
+                attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
+                attrs[node]['type'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_type']
+                attrs[node]['name'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_name']
+            elif node in acqui_entities:
+                attrs[node]['trader_type'] = 'receiver'
+                attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
+                attrs[node]['type'] = df[df['acquiringEntity_id'] == node].iloc[0]['acquiringEntity_type']
+                attrs[node]['name'] = df[df['acquiringEntity_id'] == node].iloc[0]['acquiringEntity_name']
+            if node == this_node:  # just changing the trader type and color (name and type should have been set before)
+                attrs[node]['trader_type'] = 'this'
+                attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
+
+        nx.set_node_attributes(G, attrs)
+
+        # defining width of arrows
+        minw = 0.05
+        maxw = 3
+        max_width = max([G[u][v]['amount'] for u, v in G.edges])
+        width = [maxw * G[u][v]['amount'] / max_width + minw for u, v in G.edges()]
+
+        # get list of nodes and reorder based on trader type
+        list_of_nodes = [x for _, x in sorted(zip([attrs[n]['trader_type'] for n in G], G))]
+        list_of_nodes.remove(this_node)
+
+        # define circular position
+        pos = nx.circular_layout(list_of_nodes, scale=2)
+        pos[this_node] = np.array([0, 0])
+
+        # define label positions
+        pos_attrs = {}
+        for node, coords in pos.items():
+            pos_attrs[node] = (coords[0], coords[1] + .25)
+
+        # plot the whole thing
+        fig, ax = plt.subplots(figsize=(10, 7))
+        nx.draw(G, pos=pos,
+                connectionstyle='arc3,rad=0.1', node_color=[attrs[x]['color'] for x in attrs],
+                with_labels=False, width=width)
+        nx.draw_networkx_labels(G, pos_attrs, labels={n: attrs[n]['name'] for n in attrs})
+        ax.legend(handles=color_handles)
+        if self.entity_type == 'Company':
+            plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_id}'.format(this_node))
+        else:
+            plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_name}'.format(this_node))
+        plt.savefig(f'../plots/arrows_{self.entity_type}_{self.entity_id}.png', dpi=500)
 
 
-EntityConnexion('Account', 133)
-EntityConnexion('AccountHolder', 145)
-EntityConnexion('Company', 'FN 71396 w')
+
+
+for i in range(1000):
+    EntityConnexion('Account', i)
+# EntityConnexion('AccountHolder', 145)
+# EntityConnexion('Company', 'FN 71396 w')
