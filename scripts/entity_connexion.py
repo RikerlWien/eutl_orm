@@ -52,13 +52,20 @@ class EntityConnexion:
         for account in self.accounts:
             transaction_tables.append(account.get_transactions())
 
+        if len(transaction_tables) == 1 and transaction_tables[0] is None:
+            return
         transactions = pd.concat(transaction_tables)
         transactions['datetime'] = pd.to_datetime(transactions.index)
 
-        transactions = transactions[['datetime', 'amount',
-                                     'transferringAccount_id', 'transferringAccountName', 'transferringAccountType',
-                                     'acquiringAccount_id', 'acquiringAccountName', 'acquiringAccountType',
-                                     'transactionTypeMain', 'transactionTypeSupplementary', 'unitType']]
+        column_list = ['datetime', 'amount',
+                       'transferringAccount_id', 'transferringAccountName', 'transferringAccountType',
+                       'acquiringAccount_id', 'acquiringAccountName', 'acquiringAccountType',
+                       'transactionTypeMain', 'transactionTypeSupplementary', 'unitType']
+        for c in column_list:
+            if c not in transactions.columns:
+                return
+
+        transactions = transactions[column_list]
 
         if self.entity_type == 'Account':
             for v in ['transferring', 'acquiring']:
@@ -74,12 +81,17 @@ class EntityConnexion:
             #  then rename columns
             pass
 
+        # todo: add an option to remove "admin" transactions
+
         self.transactions = transactions
 
         print('  > Found {} transactions\n'.format(len(self.transactions)))
         # todo: add the period condition here
 
     def plot_arrows(self):
+
+        if self.transactions is None:
+            return
 
         df = self.transactions
         this_node = self.entity_id
@@ -149,15 +161,22 @@ class EntityConnexion:
         nx.draw_networkx_labels(G, pos_attrs, labels={n: attrs[n]['name'] for n in attrs})
         ax.legend(handles=color_handles)
         if self.entity_type == 'Company':
-            plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_id}'.format(this_node))
+            plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_id}')
         else:
-            plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_name}'.format(this_node))
+            plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_name}')
         plt.savefig(f'../plots/arrows_{self.entity_type}_{self.entity_id}.png', dpi=500)
 
+    def plot_cumul(self):
+        # todo: add the plot of cumulative holdings
+        return
 
+    def plot_compliance(self):
+        # todo: add the plot of emissions, free allocations and surrendered certificates
+        return
 
 
 for i in range(1000):
     EntityConnexion('Account', i)
+
 # EntityConnexion('AccountHolder', 145)
 # EntityConnexion('Company', 'FN 71396 w')
