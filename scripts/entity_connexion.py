@@ -96,13 +96,13 @@ class EntityConnexion:
         df = self.transactions
         this_node = self.entity_id
 
-        G = nx.from_pandas_edgelist(df, source='transferringEntity_id', target='acquiringEntity_id',
+        transaction_graph = nx.from_pandas_edgelist(df, source='transferringEntity_id', target='acquiringEntity_id',
                                     edge_attr='amount', create_using=nx.DiGraph())
 
         # determine receiver/sender/trader status
         attrs = {}
-        trans_entities = set(df['transferringEntity_id'].to_list())
-        acqui_entities = set(df['acquiringEntity_id'].to_list())
+        trans_entities = set(df['transferringEntity_id'])
+        acqui_entities = set(df['acquiringEntity_id'])
 
         # colors
         color_legend = {'this': 'green', 'trader': 'violet', 'sender': 'blue', 'receiver': 'red'}
@@ -111,60 +111,64 @@ class EntityConnexion:
             color_handles.append(mpatches.Patch(color=color_legend[c], label=c))
 
         # loop over nodes
-        for node in G:
+        for node in transaction_graph:
             attrs[node] = {}
             if (node in trans_entities) and (node in acqui_entities):
                 attrs[node]['trader_type'] = 'trader'
                 attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
                 attrs[node]['type'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_type']
                 attrs[node]['name'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_name']
+                attrs[node]['id'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_id']
             elif node in trans_entities:
                 attrs[node]['trader_type'] = 'sender'
                 attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
                 attrs[node]['type'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_type']
                 attrs[node]['name'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_name']
+                attrs[node]['id'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_id']
             elif node in acqui_entities:
                 attrs[node]['trader_type'] = 'receiver'
                 attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
                 attrs[node]['type'] = df[df['acquiringEntity_id'] == node].iloc[0]['acquiringEntity_type']
                 attrs[node]['name'] = df[df['acquiringEntity_id'] == node].iloc[0]['acquiringEntity_name']
+                attrs[node]['id'] = df[df['acquiringEntity_id'] == node].iloc[0]['acquiringEntity_id']
             if node == this_node:  # just changing the trader type and color (name and type should have been set before)
                 attrs[node]['trader_type'] = 'this'
                 attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
 
-        nx.set_node_attributes(G, attrs)
+        nx.set_node_attributes(transaction_graph, attrs)
 
         # defining width of arrows
-        minw = 0.05
-        maxw = 3
-        max_width = max([G[u][v]['amount'] for u, v in G.edges])
-        width = [maxw * G[u][v]['amount'] / max_width + minw for u, v in G.edges()]
+        width_thinnest_edge = 0.05
+        width_thickest_edge = 3
+        max_width = max([transaction_graph[u][v]['amount'] for u, v in transaction_graph.edges])
+        width = [width_thickest_edge * transaction_graph[u][v]['amount'] / max_width + width_thinnest_edge for u, v in transaction_graph.edges()]
 
         # get list of nodes and reorder based on trader type
-        list_of_nodes = [x for _, x in sorted(zip([attrs[n]['trader_type'] for n in G], G))]
+        list_of_nodes = [x for _, x in sorted(zip([attrs[n]['trader_type'] for n in transaction_graph], transaction_graph))]
         list_of_nodes.remove(this_node)
 
         # define circular position
         pos = nx.circular_layout(list_of_nodes, scale=2)
         pos[this_node] = np.array([0, 0])
 
-        # define label positions
+        # define label positions (slightly below node)
         pos_attrs = {}
         for node, coords in pos.items():
-            pos_attrs[node] = (coords[0], coords[1] + .25)
+            pos_attrs[node] = (coords[0], coords[1] - .25)
 
         # plot the whole thing
         fig, ax = plt.subplots(figsize=(10, 7))
-        nx.draw(G, pos=pos,
+        nx.draw(transaction_graph, pos=pos,
                 connectionstyle='arc3,rad=0.1', node_color=[attrs[x]['color'] for x in attrs],
                 with_labels=False, width=width)
-        nx.draw_networkx_labels(G, pos_attrs, labels={n: attrs[n]['name'] for n in attrs})
+        nx.draw_networkx_labels(transaction_graph, pos_attrs, labels={n: f"{attrs[n]['name']} ({attrs[n]['id']})" for n in attrs})
         ax.legend(handles=color_handles)
         if self.entity_type == 'Company':
             plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_id}')
         else:
             plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_name}')
         plt.savefig(f'../plots/arrows_{self.entity_type}_{self.entity_id}.png', dpi=500)
+        plt.close()
 
     def plot_cumul(self):
         # todo: add the plot of cumulative holdings
