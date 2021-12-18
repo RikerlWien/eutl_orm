@@ -98,6 +98,8 @@ class EntityConnexion:
 
         transaction_graph = nx.from_pandas_edgelist(df, source='transferringEntity_id', target='acquiringEntity_id',
                                     edge_attr='amount', create_using=nx.DiGraph())
+        if len(transaction_graph) > 40:  # if too many nodes, no point in plotting
+            return
 
         # determine receiver/sender/trader status
         attrs = {}
@@ -167,6 +169,7 @@ class EntityConnexion:
             plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_id}')
         else:
             plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_name}')
+        plt.tight_layout()
         plt.savefig(f'../plots/arrows_{self.entity_type}_{self.entity_id}.png', dpi=500)
         plt.close()
 
