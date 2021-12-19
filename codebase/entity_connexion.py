@@ -1,13 +1,16 @@
 
 import numpy as np
 import pandas as pd
+import warnings
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
 from eutl_orm import DataAccessLayer
+from eutl_orm import Account, AccountHolder
 from attic.connection_settings import connectionSettings
-from eutl_orm import Installation, Account, AccountHolder
+from attic.constants import EntityType
+from attic import paths
 
 dal = DataAccessLayer(**connectionSettings)
 session = dal.session
@@ -15,11 +18,11 @@ session = dal.session
 
 class EntityConnexion:
     def __init__(self, entity_type, entity_id, period=(None, None)):
-        if entity_type in ['Account', 'Company', 'AccountHolder']:
-            self.entity_type = entity_type
+        print(entity_type)
+        if entity_type not in [EntityType.Account, EntityType.AccountHolder, EntityType.Company]:
+            raise ValueError('entity_type needs to be one of Account, Company or AccountHolder')
         else:
-            print('entity_type needs to be one of Account, Company or AccountHolder')
-            raise ValueError
+            self.entity_type = entity_type
         self.entity_id = entity_id
         self.period = period
         self.accounts = None
@@ -42,10 +45,8 @@ class EntityConnexion:
             self.accounts = session.query(Account).filter(Account.companyRegistrationNumber == self.entity_id).all()
             self.entity_name = ''
 
-        print('You are working with {} with id {} ({}) - {} related accounts'.format(self.entity_type,
-                                                                                     self.entity_id,
-                                                                                     self.entity_name,
-                                                                                     len(self.accounts)))
+        print(f'You are investigating {self.entity_type} number {self.entity_id} '
+              f'(name: {self.entity_name}) - {len(self.accounts)} related accounts')
 
     def get_transactions(self):
         transaction_tables = []
@@ -63,9 +64,10 @@ class EntityConnexion:
                        'transactionTypeMain', 'transactionTypeSupplementary', 'unitType']
         for c in column_list:
             if c not in transactions.columns:
+                warnings.warn('Columns not available. Investigate!')
                 return
 
-        transactions = transactions[column_list]
+        transactions = transactions[column_list].copy()
 
         if self.entity_type == 'Account':
             for v in ['transferring', 'acquiring']:
@@ -74,10 +76,10 @@ class EntityConnexion:
                                              f'{v}AccountType': f'{v}Entity_type'}, inplace=True)
         elif self.entity_type == 'AccountHolder':
             # todo: merge with account get accountholder_id > merger with accountHolder (transferring and acquiring) > keep accountholder name
-            #  then rename columns
+            #  then rename columns, drop transactions from accountholder_id to itself
             pass
         elif self.entity_type == 'Company':
-            # todo: merge with account get accountholder_id > merger with accountHolder (transferring and acquiring) > keep accountholder name
+            # todo: merge with account get company_id > merger with accountHolder (transferring and acquiring)
             #  then rename columns
             pass
 
@@ -99,6 +101,8 @@ class EntityConnexion:
         transaction_graph = nx.from_pandas_edgelist(df, source='transferringEntity_id', target='acquiringEntity_id',
                                     edge_attr='amount', create_using=nx.DiGraph())
         if len(transaction_graph) > 40:  # if too many nodes, no point in plotting
+            warnings.warn('Too many nodes, not producing graph')
+            warnings.warn('Too many nodes, not producing graph')
             return
 
         # determine receiver/sender/trader status
@@ -115,6 +119,7 @@ class EntityConnexion:
         # loop over nodes
         for node in transaction_graph:
             attrs[node] = {}
+            # todo: change color based on account type not on trader_type
             if (node in trans_entities) and (node in acqui_entities):
                 attrs[node]['trader_type'] = 'trader'
                 attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
@@ -163,14 +168,16 @@ class EntityConnexion:
         nx.draw(transaction_graph, pos=pos,
                 connectionstyle='arc3,rad=0.1', node_color=[attrs[x]['color'] for x in attrs],
                 with_labels=False, width=width)
-        nx.draw_networkx_labels(transaction_graph, pos_attrs, labels={n: f"{attrs[n]['name']} ({attrs[n]['id']})" for n in attrs})
+        nx.draw_networkx_labels(transaction_graph, pos_attrs, labels={n: f"{attrs[n]['name']} \n({attrs[n]['id']})" for n in attrs})
         ax.legend(handles=color_handles)
         if self.entity_type == 'Company':
             plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_id}')
         else:
             plt.title(f'ETS trading connections for {self.entity_type}: {self.entity_name}')
         plt.tight_layout()
+        print(paths.path_plots / f'arrows')
         plt.savefig(f'../plots/arrows_{self.entity_type}_{self.entity_id}.png', dpi=500)
+        # plt.savefig(paths.path_plots / f'/arrows_{self.entity_type}_{self.entity_id}.png', dpi=500)
         plt.close()
 
     def plot_cumul(self):
@@ -180,10 +187,3 @@ class EntityConnexion:
     def plot_compliance(self):
         # todo: add the plot of emissions, free allocations and surrendered certificates
         return
-
-
-for i in range(1000):
-    EntityConnexion('Account', i)
-
-# EntityConnexion('AccountHolder', 145)
-# EntityConnexion('Company', 'FN 71396 w')
