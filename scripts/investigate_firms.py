@@ -145,9 +145,10 @@ missing_companies.drop(labels='_merge', axis=1, inplace=True)
 
 missing_companies.to_excel('../data/missing_companies_2021.xlsx')
 
-df = account_df.groupby(['accountType_id', 'companyRegistrationNumber'], as_index=False)\
+df = account_df.groupby(['accountHolder_id', 'companyRegistrationNumber'], as_index=False)\
     ['id'].count()
-df = df[df.id > 1]
-df['double_ah'] = df['accountType_id'].value_counts()
-df['double_cr'] = df['companyRegistrationNumber'].value_counts()
+df['double_ah'] = df.groupby('accountHolder_id')['accountHolder_id'].transform('count')
+df['double_cr'] = df.groupby('companyRegistrationNumber')['companyRegistrationNumber'].transform('count')
+df = df[(df.double_ah > 1) | (df.double_cr > 1)]
 print(df)
+df.to_excel('../data/accountHolder_company_weird.xlsx')
