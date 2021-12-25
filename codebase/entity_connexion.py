@@ -28,7 +28,8 @@ def map_account_to_accountHolder() -> pd.DataFrame:
     The DataFrame is used to map each account with its account holder. Since this mapping is independent of a
     particular Entity under consideration, we define it at the module level. It is built when the module is imported.
     """
-    mapping = pd.DataFrame(session.query(Account.id, Account.accountHolder_id).all())
+    mapping_query = session.query(Account.id, Account.accountHolder_id)
+    mapping = pd.read_sql(mapping_query.statement, con=session.bind)
     mapping.dropna(inplace=True)
     mapping["accountHolder_id"] = mapping["accountHolder_id"].astype(int)
     mapping.rename(columns={"id": "account_id"}, inplace=True)
@@ -110,20 +111,32 @@ class EntityConnexion:
 
         transactions = transactions[column_list].copy()
 
-        if self.entity_type == 'Account':
+        if self.entity_type == EntityType.Account:
             # rename AccountHolder -> Entity
-            for side in ['transferring', 'acquiring']:
+            for side in self.sides:
                 transactions.rename(columns={f'{side}Account_id': f'{side}Entity_id',
                                              f'{side}AccountName': f'{side}Entity_name',
                                              f'{side}AccountType': f'{side}Entity_type'}, inplace=True)
-        elif self.entity_type == 'AccountHolder':
+        elif self.entity_type == EntityType.AccountHolder:
             # map each (transferring or acquiring) account to its account holder
             for side in self.sides:
                 account_to_accountHolder_temp = account_to_accountHolder.copy()
-                account_to_accountHolder_temp.rename(columns={"account_id": f"{side}Account_id",
-                                                              "accountHolder_id": f"{side}AccountHolder_id",
-                                                              "accountHolder_name": f"{side}AccountHolder_name"}, inplace=True)
-                transactions = transactions.merge(account_to_accountHolder_temp)
+                account_to_accountHolder_temp.rename(columns={"accountHolder_id": f"{side}AccountHolder_id",
+                                                              "accountHolder_name": f"{side}AccountHolder_name"},
+                                                     inplace=True)
+                # merge transaction table with dataframe containing account holder information for each account
+                # -> merge on account id (for each side separately)
+                #
+                transactions = transactions.merge(account_to_accountHolder_temp,
+                                                  how="left",
+                                                  left_on=[f"{side}Account_id"],
+                                                  right_on=["account_id"],
+                                                  indicator=f"{side}_mapped"
+                                                  )
+
+                assert (transactions[f"{side}_mapped"] == "both").all(), f"Not all {side} accounts could be mapped to" \
+                                                                         f"their account holder."
+                # TODO: does this case ever happen ? If yes, what do we want to do ?
 
             # discard internal transactions between accounts of the same account holder
             transactions = transactions[transactions["acquiringAccountHolder_id"] != transactions["transferringAccountHolder_id"]]
@@ -137,6 +150,12 @@ class EntityConnexion:
             for side in self.sides:
                 transactions.rename(columns={f'{side}AccountHolder_id': f'{side}Entity_id',
                                              f'{side}AccountHolder_name': f'{side}Entity_name'}, inplace=True)
+
+            # add field "entity type" for each side. Since there is no EntityType for AccountHolders in the DB, we
+            # leave it empty for now
+            # TODO: is there something meaningful we could use there ?
+            for side in self.sides:
+                transactions[f"{side}Entity_type"] = np.nan
 
         elif self.entity_type == 'Company':
             # todo: merge with account get company_id > merger with accountHolder (transferring and acquiring)
@@ -162,7 +181,7 @@ class EntityConnexion:
         this_node = self.entity_id
 
         # Sometimes there are missing values in the transaction dataframe
-        for side in {'transferring', 'acquiring'}:
+        for side in self.sides:
             if transaction_table[f'{side}Entity_id'].isnull().any():
                 warnings.warn(f'  Some {side}Entity IDs missing ... replacing by -1/unknown')
                 fillval = {'transferringEntity_id': -1,
@@ -188,32 +207,24 @@ class EntityConnexion:
         for c in color_legend:
             color_handles.append(mpatches.Patch(color=color_legend[c], label=c))
 
-        entity_id_to_name = self.map_entity_id_to_name(transaction_table)
+        entity_id_to_name = self.create_entity_information_table(transaction_table)
 
         # loop over nodes
         for node in transaction_graph:
             attrs[node] = {}
             # todo: change color based on account type not on trader_type
-            attrs[node]['name'] = entity_id_to_name[node]
+            attrs[node]['name'] = entity_id_to_name.loc[node, "entity_name"]
             attrs[node]['id'] = node
+            attrs[node]['type'] = entity_id_to_name.loc[node, "entity_type"]
             if (node in trans_entities) and (node in acqui_entities):
                 attrs[node]['trader_type'] = 'trader'
                 attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
-                # TODO: commented out the line below because there is no "Type" column in the AccountHolder table.
-                #  -> is there such a thing as a "type" attribute for AccountHolders of Companies ?
-                # attrs[node]['type'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_type']
             elif node in trans_entities:
                 attrs[node]['trader_type'] = 'sender'
                 attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
-                # TODO: commented out the line below because there is no "Type" column in the AccountHolder table.
-                #  -> is there such a thing as a "type" attribute for AccountHolders of Companies ?
-                # attrs[node]['type'] = df[df['transferringEntity_id'] == node].iloc[0]['transferringEntity_type']
             elif node in acqui_entities:
                 attrs[node]['trader_type'] = 'receiver'
                 attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
-                # TODO: commented out the line below because there is no "Type" column in the AccountHolder table.
-                #  -> is there such a thing as a "type" attribute for AccountHolders of Companies ?
-                # attrs[node]['type'] = df[df['acquiringEntity_id'] == node].iloc[0]['acquiringEntity_type']
             if node == this_node:  # just changing the trader type and color (name and type should have been set before)
                 attrs[node]['trader_type'] = 'this'
                 attrs[node]['color'] = color_legend[attrs[node]['trader_type']]
@@ -259,20 +270,20 @@ class EntityConnexion:
         if not keep_interactive_plot:
             plt.close()
 
-    def map_entity_id_to_name(self, transaction_table: pd.DataFrame) -> pd.Series:
-        """Map the name of an entity to its name, both from the transaction table.
+    def create_entity_information_table(self, transaction_table: pd.DataFrame) -> pd.DataFrame:
+        """Create a table mapping the id of an entity to its name and type, taken from the transaction table.
 
-        The mapping is returned as a pandas Series with index entity id and value entity name.
-        # TODO: note that if the entity type is AccountHolder, we already have such a mapping in account_to_accountHolder
+        Each row in the DataFrame is indexed by the entity id and contains the columns "entity_name" and "entity_type".
         """
         mapping = []
         for side in self.sides:
-            mapping_side = transaction_table[[f"{side}Entity_id", f"{side}Entity_name"]].copy()
+            mapping_side = transaction_table[[f"{side}Entity_id", f"{side}Entity_name", f"{side}Entity_type"]].copy()
             mapping_side.rename(columns={f"{side}Entity_id": "entity_id",
-                                         f"{side}Entity_name": "entity_name"}, inplace=True)
+                                         f"{side}Entity_name": "entity_name",
+                                         f"{side}Entity_type": "entity_type"}, inplace=True)
             mapping.append(mapping_side)
         mapping = pd.concat(mapping).drop_duplicates()
-        mapping = mapping.set_index("entity_id").squeeze().sort_index()
+        mapping = mapping.set_index("entity_id").sort_index()
         return mapping
 
     def plot_cumul(self):
