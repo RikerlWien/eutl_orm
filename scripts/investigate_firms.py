@@ -12,12 +12,20 @@ from attic.constants import EntityType
 dal = DataAccessLayer(**connectionSettings)
 session = dal.session
 
+"""
+This script computes and plots a number of descriptive statistics:
+> nb_accounts per year (total and split up by accountType)
+> nb_accountHolders per year 
+> nb_companies per year
+At the very end it investigates where companies do not share an accountHolder_id and company_id
+"""
+
 # ------------------------------------------------------------
 # Controls and constants
 # ------------------------------------------------------------
 
 do_data = False
-do_plotting = True
+do_plotting = False
 year_range = range(2012, 2022)
 
 
@@ -31,7 +39,7 @@ account_type_table.rename(columns={'id': 'accountType_id'}, inplace=True)
 
 if do_data:
     # prepare data
-    descriptive_statistics_per_year = pd.DataFrame()
+    df_comp_or_accHold_id_not_matching = pd.DataFrame()
     nb_accounts_per_account_type_per_year = pd.DataFrame()
 
     for year in year_range:
@@ -61,15 +69,15 @@ if do_data:
         nb_accounts_per_account_type_per_year = nb_accounts_per_account_type_per_year.append(pd.DataFrame([[year] + account_types['counts'].tolist()],
                                                                                                           columns=['year'] + account_types['description'].tolist()))
 
-        descriptive_statistics_per_year = descriptive_statistics_per_year.append(pd.DataFrame([[year, len(account_query.all()), len(n_account_holders), len(n_companies)]],
-                                                                                              columns=['year', 'nb_accounts', 'nb_accountHolders', 'nb_companies']))
+        df_comp_or_accHold_id_not_matching = df_comp_or_accHold_id_not_matching.append(pd.DataFrame([[year, len(account_query.all()), len(n_account_holders), len(n_companies)]],
+                                                                                                    columns=['year', 'nb_accounts', 'nb_accountHolders', 'nb_companies']))
 
-    descriptive_statistics_per_year.to_excel(paths.path_data / 'descriptive_stats_per_year.xlsx', index=False)
+    df_comp_or_accHold_id_not_matching.to_excel(paths.path_data / 'descriptive_stats_per_year.xlsx', index=False)
     nb_accounts_per_account_type_per_year.fillna(value=0, inplace=True)
     nb_accounts_per_account_type_per_year.to_excel(paths.path_data / 'descriptive_stats_per_year_accountTypes.xlsx', index=False)
 
 else:
-    descriptive_statistics_per_year = pd.read_excel(paths.path_data / 'descriptive_stats_per_year.xlsx')
+    df_comp_or_accHold_id_not_matching = pd.read_excel(paths.path_data / 'descriptive_stats_per_year.xlsx')
     nb_accounts_per_account_type_per_year = pd.read_excel(paths.path_data / 'descriptive_stats_per_year_accountTypes.xlsx')
 
 # ------------------------------------------------------------
@@ -81,8 +89,8 @@ if do_plotting:
     # Plot evolution of number of accounts of each entity type over time
     for entity_type in ['accounts', 'accountHolders', 'companies']:
         fig, ax = plt.subplots(figsize=(10, 7))
-        x = descriptive_statistics_per_year['year']
-        y = descriptive_statistics_per_year[f'nb_{entity_type}']
+        x = df_comp_or_accHold_id_not_matching['year']
+        y = df_comp_or_accHold_id_not_matching[f'nb_{entity_type}']
         plt.bar(x, y, color='navy')
         plt.title(f'Number of active {entity_type}')
         ax.xaxis.set_ticks(year_range)
@@ -140,33 +148,55 @@ if do_plotting:
 # ----------------------------------------------------------------------
 
 # query all accounts active in 2020 (example year)
+year_studied = 2020
 account_query = session.query(mo.Account)\
-    .filter(mo.Account.openingDate <= dt.date(2020, 12, 31))\
-    .filter(or_(mo.Account.closingDate >= dt.date(2020, 1, 1),
+    .filter(mo.Account.openingDate <= dt.date(year_studied, 12, 31))\
+    .filter(or_(mo.Account.closingDate >= dt.date(year_studied, 1, 1),
                 mo.Account.isOpen))
-
 account_df = pd.read_sql(sql=account_query.statement, con=session.bind)\
     .fillna(value={'companyRegistrationNumber': 'NA'})
 
-# select only accounts for which there is no company registration number
-missing_companies = account_df[account_df.companyRegistrationNumber == 'NA']
+# get accountHolder_ids and corresponding names
+accountHolder_mapping_query = session.query(mo.AccountHolder.id, mo.AccountHolder.name)
+accountHolder_mapping = pd.read_sql(accountHolder_mapping_query.statement, con=session.bind)
+accountHolder_mapping.rename(columns={'id': 'accountHolder_id',
+                                      'name': 'accountHolder_name'}, inplace=True)
 
+# FIRST QUESTION: what accounts do not have a company_registration_number?
+# select accounts with missing compRegNum
+missing_company_id_list = ['NA', 'na', '0', '-', 'n.a. Körperschaft des öffentl. Rechts', 'Government',
+                           'Co-operative Society', 'Academic', 'Not applicable', 'TBA',
+                           'Körperschaft des öffentl. Rechts']
+account_df.loc[account_df.companyRegistrationNumber.isin(missing_company_id_list), 'companyRegistrationNumber'] = 'NA'
+missing_companies = account_df[account_df.companyRegistrationNumber.isin(missing_company_id_list)]
+# add the information on the accountType
 missing_companies = missing_companies.merge(account_type_table, on='accountType_id', how='left', indicator=True)
 if len(missing_companies[missing_companies._merge != 'both']) > 0:
     ValueError('Some not merged')
 missing_companies.drop(labels='_merge', axis=1, inplace=True)
-
-missing_companies.to_excel(paths.path_data / 'missing_companies_2021.xlsx')
+# add the information on the accountHolder_name
+missing_companies = missing_companies.merge(accountHolder_mapping, on='accountHolder_id', how='left', indicator=True)
+if len(missing_companies[missing_companies._merge != 'both']) > 0:
+    ValueError('Some not merged')
+missing_companies.drop(labels='_merge', axis=1, inplace=True)
+# Output
+print(f'> In {year_studied}, out of {len(account_df)} active accounts, {len(missing_companies)} had no company_id.')
+print(f'  An analysis by hand for 2020 shows that 70% of those are government accounts and many other private accounts.')
+missing_companies.to_excel(paths.path_data / f'missing_companies_{year_studied}.xlsx')
 
 # Group accounts by account holder id AND company registration number
-# If account holder id (AH ID) and company registration number (CRN) exactly correspond, there shouldn't be any duplicate AH ID
-# or CRN.
-# If not, we will find accounts held by different Account Holder for the same Company Registration Number,
-# or accounts of different companies but held by the same Account Holder
-descriptive_statistics_per_year = account_df.groupby(['accountHolder_id', 'companyRegistrationNumber'], as_index=False)\
+df_comp_or_accHold_id_not_matching = account_df.groupby(['accountHolder_id', 'companyRegistrationNumber'], as_index=False)\
     ['id'].count()
-descriptive_statistics_per_year['double_ah'] = descriptive_statistics_per_year.groupby('accountHolder_id')['accountHolder_id'].transform('count')
-descriptive_statistics_per_year['double_cr'] = descriptive_statistics_per_year.groupby('companyRegistrationNumber')['companyRegistrationNumber'].transform('count')
-descriptive_statistics_per_year = descriptive_statistics_per_year[(descriptive_statistics_per_year.double_ah > 1) | (descriptive_statistics_per_year.double_cr > 1)]
-print(descriptive_statistics_per_year)
-descriptive_statistics_per_year.to_excel(paths.path_data / 'accountHolder_company_weird.xlsx')
+df_comp_or_accHold_id_not_matching.rename(columns={'id': 'nb_accounts'}, inplace=True)
+df_comp_or_accHold_id_not_matching['nb_CR_for_this_AH'] = df_comp_or_accHold_id_not_matching.groupby('accountHolder_id')['accountHolder_id'].transform('count')
+df_comp_or_accHold_id_not_matching['nb_AH_for_this_CR'] = df_comp_or_accHold_id_not_matching.groupby('companyRegistrationNumber')['companyRegistrationNumber'].transform('count')
+df_comp_or_accHold_id_not_matching = df_comp_or_accHold_id_not_matching[(df_comp_or_accHold_id_not_matching.nb_AH_for_this_CR > 1) |
+                                                                        (df_comp_or_accHold_id_not_matching.nb_CR_for_this_AH > 1)]
+df_comp_or_accHold_id_not_matching = df_comp_or_accHold_id_not_matching.merge(accountHolder_mapping, on='accountHolder_id', how='left', indicator=True)
+if len(df_comp_or_accHold_id_not_matching[df_comp_or_accHold_id_not_matching._merge != 'both']) > 0:
+    ValueError('Some not merged')
+df_comp_or_accHold_id_not_matching.drop(labels='_merge', axis=1, inplace=True)
+df_comp_or_accHold_id_not_matching = df_comp_or_accHold_id_not_matching[['accountHolder_id', 'accountHolder_name',
+                                                                         'companyRegistrationNumber', 'nb_accounts',
+                                                                         'nb_AH_for_this_CR', 'nb_CR_for_this_AH']]
+df_comp_or_accHold_id_not_matching.to_excel(paths.path_data / f'accountHolder_company_weird_{year_studied}.xlsx')
